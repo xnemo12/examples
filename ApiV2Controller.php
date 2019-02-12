@@ -58,12 +58,8 @@ class ApiV2Controller extends FOSRestController
             ->addSelect('o')
             ->join('o.type', 't')
             ->addSelect('t')
-//            ->leftJoin('p.locations', 'l')
-//            ->leftJoin('p.locations', 'l2', "WITH", 'p=l2.person AND l.registered < l2.registered')
-//            ->addSelect('l')
             ->where('u.id=:uid')
             ->andWhere('p.updated >= :date or p.updated is null')
-//            ->andWhere('l2.id IS NULL')
         ;
 
         $query->setParameters(['uid'=>$user->getId(), 'date'=>$paramFetcher->get('date')]);
@@ -152,52 +148,6 @@ class ApiV2Controller extends FOSRestController
      * @QueryParam(name="date", default="1970-01-01 00:00:00")
      * @param ParamFetcher $paramFetcher
      * @ApiDoc(
-     *  description="Return Visits for App",
-     *  parameters={
-     *      {"name"="date", "dataType"="date", "required"=false, "default"="1970-01-01 00:00:00",
-     *          "description"="Возвращает список посещений для учеников текущего пользователья. Входные параметры дата (необъязательный параметр). "}
-     *  }
-     * )
-     * @return Response
-     */
-    public function getVisitAction(ParamFetcher $paramFetcher)
-    {
-        $user = $this->getUser();
-
-        $p = [];
-
-        foreach($user->getPerson() as $person){
-
-            $visits = $this->getDoctrine()->getRepository('AppBundle:Visit')
-                ->getVisitsByPerson(
-                    $person->getId(),
-                    $paramFetcher->get('date')
-                );
-
-            $visits_array = [];
-
-            foreach($visits as $v){
-                $visits_array[] = [
-                    'id'=>$v['id'],
-                    'registered'=>$v['registered'],
-                    'event'=>$v['event'],
-                    'isLate'=>$v['isLate'],
-                    'building'=>$v['building']
-                ];
-            }
-
-            $p[$person->getId()] = $visits;
-        }
-
-        $view = $this->view($p, 200);
-        return $this->handleView($view);
-    }
-
-    /**
-     * @View
-     * @QueryParam(name="date", default="1970-01-01 00:00:00")
-     * @param ParamFetcher $paramFetcher
-     * @ApiDoc(
      *  description="Return Marks for App",
      *  parameters={
      *      {"name"="date", "dataType"="date", "required"=false, "default"="1970-01-01 00:00:00",
@@ -272,141 +222,6 @@ class ApiV2Controller extends FOSRestController
     }
 
     /**
-     * @View
-     * @QueryParam(name="token")
-     * @QueryParam(name="device")
-     * @param ParamFetcher $paramFetcher
-     * @ApiDoc(
-     *  description="Get token for GCM Service",
-     *  parameters={
-     *      {"name"="token", "dataType"="string", "required"=true,
-     *          "description"="токен"},
-     *     {"name"="device", "dataType"="string", "required"=true,
-     *          "description"="девайс"}
-     *  }
-     * )
-     * @return Response
-     */
-    public function getTokenAction(ParamFetcher $paramFetcher)
-    {
-        try
-        {
-            $token = $paramFetcher->get('token');
-            $device = $paramFetcher->get('device');
-            if($token){
-
-                $tokenManager = $this->get('fos_oauth_server.access_token_manager.default');
-
-		$this->get('monolog.logger.api')->addEmergency($this->get('security.token_storage')->getToken()->getToken());
-
-                $accessToken = $tokenManager->findTokenByToken(
-                    $this->get('security.token_storage')->getToken()->getToken()
-                );
-                $client = $accessToken->getClient();
-
-		$this->get('monolog.logger.api')->addEmergency($client->getId());
-
-                $client_manager = $this->get('fos_oauth_server.client_manager');
-                $client->setGcmToken($token);
-                $client->setDevice($device);
-                $client_manager->updateClient($client);
-                $result = ['success'=>true, 'msg'=>'Токен успешно сохранен'];
-            } else {
-                $result = ['success'=>false, 'msg'=>'Token required'];
-            }
-
-        } catch(Exception $e){
-
-            $result=['success'=>false, 'msg'=>'Ошибка, посмотрите лог для подробной информации'];
-        }
-        $view = $this->view($result, 200);
-        return $this->handleView($view);
-    }
-
-    /**
-     * @View
-     * @QueryParam(name="times")
-     * @QueryParam(name="polyline")
-     * @ApiDoc(
-     *  description="Save students current location (gps lon|lat)",
-     *  parameters={
-     *     {"name"="times", "dataType"="array", "required"=false},
-     *     {"name"="polyline", "dataType"="string", "required"=false}
-     *  }
-     * )
-     * @return Response
-     */
-    public function postGpsAction(Request $request) {
-
-        try{
-            $param = json_decode($request->getContent(), true);
-
-            $em = $this->getDoctrine()->getManager();
-
-            if(is_null($request->get('times')) || $request->get('times')!=''){
-                $times = $param['times'];
-            } else {
-                $times = json_decode($request->get('times'));
-            }
-
-            $polyline = $request->get('polyline', $param['polyline']);
-
-            $points = Polyline::decode($polyline);
-            $points = Polyline::pair($points);
-
-            $person = $this->getUser()->getPerson()->first();
-            $this->get('monolog.logger.api')->addEmergency($person . json_encode($times));
-
-            $i=0;
-            foreach ($times as $t) {
-                if( is_array($points[$i]) && count($points[$i])==2 ){
-
-                    $lat = $points[$i][0];
-                    $long = $points[$i][1];
-                    $lat2 = null;
-                    $long2 = null;
-                    $last_time = date('Y-m-d H:i:s');
-
-                    $pl = $em->getRepository('ApiBundle:Location')->findOneBy(['person'=>$person], ['id'=>'DESC']);
-
-                    if($pl){
-                        $lat2 = $pl->getLat();
-                        $long2 = $pl->getLong();
-                        $last_time = $pl->getRegistered()->format('Y-m-d H:i:s');
-                    }
-
-                    $distance = $this->get('app.helper')->getDistanceFromLatLonInKm($lat, $long, $lat2, $long2);
-
-                    if($distance>150 or is_null($pl)){
-                        $location = new Location();
-                        $location->setPerson($person);
-                        $location->setLat($lat);
-                        $location->setLong($long);
-                        $location->setRegistered(new \DateTime($t));
-                        $em->persist($location);
-                        $em->flush();
-                    } elseif(strtotime($t) > strtotime($last_time)){
-                        $pl->setLat($lat);
-                        $pl->setLong($long);
-                        $pl->setRegistered(new \DateTime($t));
-                        $em->persist($pl);
-                        $em->flush();
-                    }
-                }
-                $i++;
-            }
-            //$em->flush();
-            $result = ['success' => true, 'msg' => 'Координаты успешно сохранены'];
-
-        }catch(Exception $e){
-            $result=['success'=>false, 'msg'=>'Ошибка отправки координат'];
-        }
-
-        $view = $this->view($result, 200);
-        return $this->handleView($view);
-    }
-
-    /**
      * @param ParamFetcher $param
      * @internal param ParamFetcher $param
      * @return Response
@@ -452,13 +267,6 @@ class ApiV2Controller extends FOSRestController
             $times[] = $location->getRegistered();
             $tuples[] = [$location->getLat(), $location->getLong()];
         }
-
-//        $times = []; $tuples=[];
-//        $location = $this->getDoctrine()
-//            ->getRepository('ApiBundle:Location')
-//            ->findOneBy(['person'=>$person], ['registered'=>'DESC']);
-//        $times[] = $location->getRegistered();
-//        $tuples[] = [$location->getLat(), $location->getLong()];
 
         $polyline = Polyline::encode($tuples);
 
